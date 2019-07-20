@@ -1,0 +1,14 @@
+[package]
+name = "testapp"
+version = "0.1.0"
+authors = ["Vincent Stakenburg <vincentstakenburg@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tinyrlibc = { path = "tinyrlibc" }
+nrfxlib-sys = "0.1.4"
+cortex-m = "0.6.0"
+cortex-m-rt = "0.6.9"
+nrf91 = { path = "nrf91-rs" }
