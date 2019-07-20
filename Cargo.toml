@@ -7,8 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tinyrlibc = { path = "tinyrlibc" }
+tinyrlibc = { git = "https://github.com/thejpster/tinyrlibc.git" }
 nrfxlib-sys = "0.1.4"
 cortex-m = "0.6.0"
 cortex-m-rt = "0.6.9"
-nrf91 = { path = "nrf91-rs" }
+nrf91 = { path = "nrf91-rs", features = ["rt"] }
