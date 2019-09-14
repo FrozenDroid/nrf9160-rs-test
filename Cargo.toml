@@ -2,15 +2,10 @@
 name = "testapp"
 version = "0.1.0"
 authors = ["Vincent Stakenburg <vincentstakenburg@gmail.com>"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tinyrlibc = { git = "https://github.com/thejpster/tinyrlibc.git" }
-#byteorder = { version = "1.3.2", default-features = false }
+tinyrlibc = "0.1.2"
 nrfxlib-sys = "0.1.4"
 cortex-m = "0.6.0"
 cortex-m-rt = "0.6.9"
-alloc-cortex-m = "0.3.5"
-nrf91 = { path = "nrf91-rs", features = ["rt"] }
+nrf91 = { version = "0.1.0", features = ["rt"] }
