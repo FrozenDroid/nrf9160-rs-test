@@ -1,0 +1,6 @@
+[submodule "nrf52-hal"]
+	path = nrf52-hal
+	url = https://github.com/nrf-rs/nrf52-hal
+[submodule "nrf91-bsdlib"]
+	path = nrf91-bsdlib
+	url = git@github.com:FrozenDroid/nrf91-bsdlib.git

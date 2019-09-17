@@ -10,59 +10,6 @@ static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 #[no_mangle]
 extern crate tinyrlibc;
 
-
-extern "C" {
-    fn IPC_IRQHandler();
-}
-
-#[no_mangle]
-extern "C" fn bsd_os_init() {
-
-}
-
-#[no_mangle]
-extern "C" fn bsd_os_errno_set(err: nrfxlib_sys::ctypes::c_int) {
-    cortex_m::asm::bkpt();
-}
-
-#[no_mangle]
-extern "C" fn bsd_irrecoverable_error_handler(error: u32) {
-    cortex_m::asm::bkpt();
-}
-//
-#[no_mangle]
-extern "C" fn bsd_os_timedwait(context: u32, p_timeout: *mut i32) -> i32 {
-    0
-}
-
-#[no_mangle]
-extern crate nrfxlib_sys;
-//
-#[no_mangle]
-extern "C" fn bsd_os_application_irq_clear() {
-    NVIC::unpend(nrf91::interrupt::EGU1);
-}
-
-#[no_mangle]
-extern "C" fn bsd_os_application_irq_set() {
-    NVIC::pend(nrf91::interrupt::EGU1);
-}
-
-#[no_mangle]
-extern "C" fn bsd_os_trace_irq_set() {
-    NVIC::pend(nrf91::interrupt::EGU2);
-}
-
-#[no_mangle]
-extern "C" fn bsd_os_trace_irq_clear() {
-    NVIC::unpend(nrf91::interrupt::EGU2);
-}
-
-#[no_mangle]
-extern "C" fn bsd_os_trace_put(p_buffer: *const u8, buf_len: u32) -> i32 {
-    0
-}
-
 #[macro_use]
 extern crate cortex_m_rt;
 
@@ -79,6 +26,11 @@ use core::alloc::Layout;
 use cortex_m::peripheral::NVIC;
 use core::ops::Add;
 use core::ptr::{null, null_mut};
+use embedded_hal::timer::CountDown;
+use core::fmt::Write;
+use nrf91::UARTE0_NS;
+use nrf9160_dk_bsp::{Board, hal::Timer, prelude::*};
+use nrf9160_hal::{Uarte};
 
 static mut dev_per: Option<Peripherals> = None;
 static mut core_per: Option<cortex_m::Peripherals> = None;
@@ -95,102 +47,98 @@ fn core_peripherals() -> &'static mut cortex_m::Peripherals {
     }
 }
 
-use nrf91::UARTE1_NS;
+
+static mut CDC_UART: Option<Uarte<UARTE0_NS>> = None;
+
+fn cdc_uart() -> &'static mut Uarte<UARTE0_NS> {
+    unsafe {
+        CDC_UART.as_mut().unwrap()
+    }
+}
 
 #[entry]
 fn main() -> ! {
+    let mut board = Board::take().unwrap();
+    let mut timer = Timer::new(board.TIMER0_NS);
+
+    unsafe {
+        CDC_UART = Some(board.cdc_uart);
+    }
+
     // Initialize the allocator BEFORE you use it
     let start = cortex_m_rt::heap_start() as usize;
     let size = 1024; // in bytes
     unsafe { ALLOCATOR.init(start, size) }
 
-    unsafe {
-        dev_per = nrf91::Peripherals::take();
-        core_per = cortex_m::Peripherals::take();
-    }
+    board.POWER_NS.tasks_constlat.write(|f| f.tasks_constlat().trigger());
 
-    device_peripherals().UARTE1_NS.config.write(|f| f.hwfc().enabled().parity().excluded().stop().one());
-    device_peripherals().UARTE1_NS.baudrate.write(|f| f.baudrate().baud115200());
+    let mut bsdlib = nrf91_bsdlib::init(&mut board.NVIC).unwrap();
 
-    device_peripherals().P0_NS.outset.write(|f| f.pin29().set());
-    device_peripherals().P0_NS.dir.write(|f| f.pin29().output().pin2().output());
+    writeln!(cdc_uart(), "BSD initialized");
 
-    device_peripherals().UARTE1_NS.psel.txd.write(|f| unsafe { f.connect().bit(true).pin().bits(29) });
-    device_peripherals().UARTE1_NS.psel.rxd.write(|f| unsafe { f.connect().bit(true).pin().bits(28) });
-    device_peripherals().UARTE1_NS.psel.rts.write(|f| unsafe { f.connect().bit(true).pin().bits(27) });
-    device_peripherals().UARTE1_NS.psel.cts.write(|f| unsafe { f.connect().bit(true).pin().bits(26) });
+    let mut socket = bsdlib.create_socket(nrf91_bsdlib::ProtocolFamily::LTE, nrf91_bsdlib::ProtocolType::None, nrf91_bsdlib::TransportProtocol::AT).unwrap();
+    writeln!(cdc_uart(), "AT socket fd: {:?}", socket);
 
-    device_peripherals().UARTE1_NS.events_endrx.write(|f| f.events_endrx().clear_bit());
-    device_peripherals().UARTE1_NS.events_endtx.write(|f| f.events_endtx().clear_bit());
-    device_peripherals().UARTE1_NS.events_error.write(|f| f.events_error().clear_bit());
-    device_peripherals().UARTE1_NS.events_rxto.write(|f| f.events_rxto().clear_bit());
-    device_peripherals().UARTE1_NS.events_txstopped.write(|f| f.events_txstopped().clear_bit());
-    device_peripherals().UARTE1_NS.inten.write(|f|
-        f.endrx().enabled()
-            .endtx().enabled()
-            .error().enabled()
-            .rxto().enabled()
-            .txstopped().enabled()
-    );
+    let mut buffer = [0u8; 128];
 
-    device_peripherals().UARTE1_NS.enable.write(|f| f.enable().enabled());
 
-//    device_peripherals().UARTE1_NS.tasks_startrx.write(|f| f.tasks_startrx().set_bit());
 
-//    device_peripherals().P0_NS.dir.modify(|r, f| f.pin2().output());
+    let recv = socket.send_command("AT%XSYSTEMMODE=1,0,0,0", &mut buffer).unwrap();
+    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
 
-    unsafe {
-        core_peripherals().NVIC.set_priority(nrf91::interrupt::EGU1, 6);
-        core_peripherals().NVIC.set_priority(nrf91::interrupt::EGU2, 6);
-    }
+    let recv = socket.send_command("AT+CGDCONT=1,\"IP\",\"ibasis.iot\"", &mut buffer).unwrap();
+    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
 
-//    core_peripherals().NVIC.enable(nrf91::interrupt::UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
-    core_peripherals().NVIC.enable(nrf91::interrupt::EGU1);
-    core_peripherals().NVIC.enable(nrf91::interrupt::EGU2);
-//    core_peripherals().NVIC.enable(nrf91::interrupt::IPC);
-
-    unsafe {
-//        let ret = nrfxlib_sys::bsd_init();
-//        let sock = nrfxlib_sys::nrf_socket(nrfxlib_sys::NRF_AF_INET as i32, nrfxlib_sys::NRF_SOCK_STREAM as i32, 0);
+//    let recv = socket.send_command("AT+CPSMS=", &mut buffer).unwrap();
+//    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
 //
-//        let mut a: *mut *mut nrfxlib_sys::nrf_addrinfo = null_mut();
-//        let mut local_addr = nrfxlib_sys::nrf_sockaddr_in { sin_addr: nrfxlib_sys::nrf_in_addr { s_addr: 0 }, sin_family: 0, sin_len: 0, sin_port: 0, };
+//    let recv = socket.send_command("AT+CIND?", &mut buffer).unwrap();
+//    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
 //
-//        let addr_ret = nrfxlib_sys::nrf_getaddrinfo("google.com".as_ptr(), null(), null(), a);
+//    let recv = socket.send_command("AT+CEDRXS=1,4,\"1000\"", &mut buffer).unwrap();
+//    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
+//
+//    let recv = socket.send_command("AT%XBANDLOCK=2,\"1000000010000001100010001110\"", &mut buffer).unwrap();
+//    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
+//
+    let recv = socket.send_command("AT+CEREG=5", &mut buffer).unwrap();
+    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
 
-//        let mut sock_addr = *core::mem::transmute::<_, *mut nrfxlib_sys::nrf_sockaddr_in>(*(**a).ai_addr);
-//        sock_addr.sin_port = (1337 as u16).to_be();
-//        sock_addr.sin_len = core::mem::size_of::<nrfxlib_sys::nrf_sockaddr_in>() as u8;
+    let recv = socket.send_command("AT+CFUN=1", &mut buffer).unwrap();
+    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
 
-//        local_addr.sin_family = nrfxlib_sys::NRF_AF_INET as i32;
+    let recv = socket.wait_for_response("+CEREG:", &mut buffer, None).unwrap();
+    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
 
+    let recv = socket.wait_for_response("+CEREG:", &mut buffer, None).unwrap();
+    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
+//
+//    let recv = socket.send_command("AT+CESQ", &mut buffer).unwrap();
+//    writeln!(cdc_uart(), "recv: {:?}", unsafe { core::str::from_utf8_unchecked(&buffer[..recv as usize]) });
 
-//        cortex_m::asm::bkpt();
-    }
+    timer.start(1_000_000u32);
 
-    let mut dma_tx = [0u8; 1];
+    nb::block!(timer.wait()).unwrap();
+
+    let tcp_socket = bsdlib.create_socket(nrf91_bsdlib::ProtocolFamily::Inet, nrf91_bsdlib::ProtocolType::Stream, nrf91_bsdlib::TransportProtocol::None);
+    writeln!(cdc_uart(), "TCP socket fd: {:?}", tcp_socket);
+
+    board.leds.led_1.enable();
 
     loop {
-        dma_tx[0] = b'\n';
-        device_peripherals().UARTE1_NS.txd.ptr.write(|f| unsafe { f.ptr().bits(dma_tx.as_ptr() as u32) });
-        device_peripherals().UARTE1_NS.txd.maxcnt.write(|f| unsafe { f.maxcnt().bits(1) });
-        device_peripherals().UARTE1_NS.tasks_starttx.write(|f| f.tasks_starttx().trigger());
-        device_peripherals().P0_NS.out.modify(|r, w| w.pin2().bit(r.pin2().is_low()));
-        cortex_m::asm::delay(64000000);
+//        writeln!(cdc_uart(), "hellooo!!!!");
+        writeln!(cdc_uart(), "ip: {:?}", bsdlib.resolve_hostname("www.google.com"));
+        board.leds.led_1.enable();
+        cortex_m::asm::delay(32000000);
+        board.leds.led_1.disable();
+        cortex_m::asm::delay(32000000);
     }
 }
 
 #[panic_handler]
 fn panic(panic: &PanicInfo) -> ! {
     unsafe {
-        device_peripherals().P0_S.dir.write(|f| f.pin2().output());
-        device_peripherals().P0_S.dir.write(|f| f.pin3().output());
-        device_peripherals().P0_S.dir.write(|f| f.pin4().output());
-        device_peripherals().P0_S.dir.write(|f| f.pin5().output());
-        device_peripherals().P0_S.out.write(|f| f.pin2().high());
-        device_peripherals().P0_S.out.write(|f| f.pin3().high());
-        device_peripherals().P0_S.out.write(|f| f.pin4().high());
-        device_peripherals().P0_S.out.write(|f| f.pin5().high());
+        writeln!(cdc_uart(), "{:?}", panic);
     }
     loop { }
 }
@@ -198,7 +146,7 @@ fn panic(panic: &PanicInfo) -> ! {
 #[no_mangle]
 #[exception]
 fn DefaultHandler(irqn: i16) {
-    irqn;
+    writeln!(cdc_uart(), "{:?}", irqn);
 //     custom default handler
 }
 
@@ -213,33 +161,18 @@ fn HardFault(ef: &ExceptionFrame) -> ! {
 #[no_mangle]
 #[interrupt]
 fn UARTE0_SPIM0_SPIS0_TWIM0_TWIS0() {
-
-}
-
-#[no_mangle]
-#[interrupt]
-fn IPC() {
-    unsafe {
-        IPC_IRQHandler();
-//        nrfxlib_sys::bsd_os_application_irq_handler();
-    }
-}
-
-#[no_mangle]
-#[interrupt]
-fn EGU1() {
-    unsafe {
-        nrfxlib_sys::bsd_os_application_irq_handler();
-    }
-}
-
-#[no_mangle]
-#[interrupt]
-fn EGU2() {
-    unsafe {
-//        cortex_m::asm::bkpt();awe
-        nrfxlib_sys::bsd_os_trace_irq_handler();
-    }
+    device_peripherals().UARTE0_NS.events_txdrdy.modify(|r, f| {
+        if r.events_txdrdy().is_generated() {
+            return f.events_txdrdy().not_generated();
+        }
+        f
+    });
+    device_peripherals().UARTE0_NS.events_endtx.modify(|r, f| {
+        if r.events_endtx().is_generated() {
+           return f.events_endtx().not_generated()
+        }
+        f
+    });
 }
 
 #[lang = "oom"]
